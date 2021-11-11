@@ -12,6 +12,8 @@ namespace StarlightRiver.Core
 	public partial class StarlightWorld
     {
         private static int GrassID => TileID.GoldBrick;
+        private static int MushroomTopID => TileID.BlueDynastyShingles;
+        private static int MushroomStemID => TileID.MushroomBlock;
 
         public static void GlowingMushrooms(GenerationProgress progress)
         {
@@ -33,8 +35,7 @@ namespace StarlightRiver.Core
             GrassLines(spawnPoint, width, height, new Vector2(1.3f, 1.1f), out List<MushroomNode> nodes);
 
             nodes.Add(new MushroomNode(new Point(nodes.Last().position.X, spawnPoint.Y), Movement.Up, CliffState.None));
-
-            WorldGen.PlaceTile(nodes.Last().position.X, spawnPoint.Y + 1, GrassID);
+            WorldGen.PlaceTile(nodes.Last().position.X, spawnPoint.Y + 1, GrassID); //Cleans up a consistent hole in the 'outline'
 
             // ADJUST WIDTH AND HEIGHT
             int furthestX = spawnPoint.X;
@@ -62,12 +63,12 @@ namespace StarlightRiver.Core
                 bool skipCorner = (i > 0 && nodes[i - 1] .move == Movement.Down) || (currentMove == Movement.Up);
                 if (skipCorner && WorldGen.genRand.Next(5) != 0 && i < nodes.Count - 2) //Cut corners to make more convincing "cliffs"
                 {
-                    GenLine(currentPoint, nodes[i + 2].position, GrassID);
+                    GenStraightLine(currentPoint, nodes[i + 2].position, GrassID);
                     ++i;
                     continue;
                 }
 
-                GenLine(currentPoint, nodes[i + 1].position, GrassID);
+                GenStraightLine(currentPoint, nodes[i + 1].position, GrassID);
             }
 
             // GENERATE MUD WALLS
@@ -75,13 +76,17 @@ namespace StarlightRiver.Core
             GenerateMudWalls(spawnPoint, width, height);
         }
 
+        /// <summary>Recursively fills out the given area with mud.</summary>
+        /// <param name="spawnPoint">Top-left point of the area.</param>
+        /// <param name="width">Width of the area.</param>
+        /// <param name="height">Height of the area.</param>
         private static void GenerateMudWalls(Point spawnPoint, int width, int height)
         {
             bool TileAt(int x, int y) => Framing.GetTileSafely(x, y).active();
 
-            void RecursiveFill(int x, int y, int repeats)
+            void RecursiveFill(int x, int y, (int, int) minMaxX, int repeats)
             {
-                if (repeats > 9040) //stop these stackoverflows >:(
+                if (repeats > 9000 || x < minMaxX.Item1 || x > minMaxX.Item2) //stop these stackoverflows >:(
                     return;
 
                 if (!TileAt(x, y))
@@ -90,21 +95,21 @@ namespace StarlightRiver.Core
                     return;
 
                 if (x > spawnPoint.X)
-                    RecursiveFill(x - 1, y, repeats + 1);
+                    RecursiveFill(x - 1, y, minMaxX, repeats + 1);
                 if (x < spawnPoint.X + width)
-                    RecursiveFill(x + 1, y, repeats + 1);
+                    RecursiveFill(x + 1, y, minMaxX, repeats + 1);
 
                 if (y > spawnPoint.Y)
-                    RecursiveFill(x , y - 1, repeats + 1);
+                    RecursiveFill(x , y - 1, minMaxX, repeats + 1);
                 if (y < spawnPoint.Y + height)
-                    RecursiveFill(x, y + 1, repeats + 1);
+                    RecursiveFill(x, y + 1, minMaxX, repeats + 1);
             }
 
             const int Offset = 1; //Do I need this? Maybe. Am I paranoid? Yes.
-            RecursiveFill(spawnPoint.X + Offset, spawnPoint.Y + Offset, 0);
-            RecursiveFill(spawnPoint.X + width - Offset, spawnPoint.Y + Offset, 0);
-            RecursiveFill(spawnPoint.X + Offset, spawnPoint.Y + height - Offset, 0);
-            RecursiveFill(spawnPoint.X + width - Offset, spawnPoint.Y + height - Offset, 0);
+            RecursiveFill(spawnPoint.X + Offset, spawnPoint.Y + Offset, (spawnPoint.X, spawnPoint.X + (int)(width / 2f)), 0);
+            RecursiveFill(spawnPoint.X + Offset, spawnPoint.Y + height - Offset, (spawnPoint.X, spawnPoint.X + (int)(width / 2f)), 0);
+            RecursiveFill(spawnPoint.X + width - Offset, spawnPoint.Y + Offset, (spawnPoint.X, spawnPoint.X + (int)(width / 2f)), 0);
+            RecursiveFill(spawnPoint.X + width - Offset, spawnPoint.Y + height - Offset, (spawnPoint.X, spawnPoint.X + (int)(width / 2f)), 0);
         }
 
         /// <summary>Places the "outline" of grass tiles.</summary>
@@ -233,7 +238,7 @@ namespace StarlightRiver.Core
             }
         }
 
-        public static void GenLine(Point start, Point end, int tileType, int paintID = -1)
+        public static void GenStraightLine(Point start, Point end, int tileType, int paintID = -1)
         {
             Vector2 position = start.ToVector2() + new Vector2(0.5f);
             float repeats = Vector2.Distance(position, end.ToVector2());
@@ -247,6 +252,44 @@ namespace StarlightRiver.Core
                 if (paintID != -1)
                     WorldGen.paintTile((int)position.X, (int)position.Y, (byte)paintID, false);
             }
+        }
+
+        public static void GenSpline(Vector2 start, Vector2 middle, Vector2 end)
+        {
+            for (float i = 0; i < 8; i += 0.00675f)
+            {
+                Point currentPos = PointOnSpline(start, middle, end, i, 1f).ToTileCoordinates();
+                WorldGen.PlaceTile(currentPos.X, currentPos.Y, GrassID);
+            }
+        }
+
+        public static Vector2 PointOnSpline(Vector2 start, Vector2 middle, Vector2 end, float progress, float factor)
+        {
+            if (progress < factor)
+                return Vector2.Hermite(start, middle - start, middle, end - start, progress * (1 / factor));
+            else
+                return Vector2.Hermite(middle, end - start, end, end - middle, (progress - factor) * (1 / (1 - factor)));
+        }
+
+        public static float ApproximateSplineLength(int steps, Vector2 start, Vector2 startTan, Vector2 end, Vector2 endTan)
+        {
+            float total = 0;
+            Vector2 prevPoint = start;
+
+            for (int k = 0; k < steps; k++)
+            {
+                Vector2 testPoint = Vector2.Hermite(start, startTan, end, endTan, k / (float)steps);
+                total += Vector2.Distance(prevPoint, testPoint);
+
+                prevPoint = testPoint;
+            }
+
+            return total;
+        }
+
+        public static void GenMassiveMushroom()
+        {
+
         }
 
         public enum Movement : int
